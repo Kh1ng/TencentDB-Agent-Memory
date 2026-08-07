@@ -21,6 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import zlib from "node:zlib";
 import dayjs from "dayjs";
 import { TdaiCore } from "../core/tdai-core.js";
+import type { RecallResult } from "../core/types.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig, parseBrokers } from "./config.js";
 import type { GatewayConfig } from "./config.js";
@@ -244,6 +245,26 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 
 function sendError(res: http.ServerResponse, status: number, message: string): void {
   sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
+}
+
+/**
+ * Builds the flat `context` string returned by POST /recall.
+ *
+ * RecallResult splits recall output into `appendSystemContext` (persona +
+ * scene navigation + tools guide -- stable, cacheable, scoped by team/agent
+ * rather than session_key) and `prependContext` (the actual per-query L1
+ * memories matched against session_key -- dynamic, changes every turn).
+ * That split exists for SDK-embedded callers with two separate injection
+ * points (system prompt suffix vs. user prompt prefix). The HTTP gateway
+ * has only one `context` field, so both parts must be included here --
+ * dropping prependContext silently discards every session-specific
+ * recalled memory and returns only the generic, session-independent
+ * persona/scene blob.
+ */
+export function buildRecallContext(result: RecallResult): string {
+  return [result.appendSystemContext, result.prependContext]
+    .filter((part): part is string => !!part)
+    .join("\n\n");
 }
 
 /**
@@ -1359,12 +1380,15 @@ export class TdaiGateway {
         `Recall failed in ${elapsed}ms: code=${result.error.code} category=${result.error.category} ` +
         `msg="${result.error.message}"`,
       );
-    } else {
-      this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    }
+
+    const context = buildRecallContext(result);
+    if (!result.error) {
+      this.logger.info(`Recall completed in ${elapsed}ms: context=${context.length} chars`);
     }
 
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context,
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
       code: result.error?.code ?? 0,
