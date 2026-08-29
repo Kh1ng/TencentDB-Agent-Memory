@@ -130,6 +130,33 @@ export interface IStateBackend {
   ackTask(taskId: string): Promise<void>;
   getQueueDepth(): Promise<{ high: number; low: number }>;
   /**
+   * Mark a previously `enqueueTask`-ed session-scoped task (L1/L2/flush) as
+   * terminally settled — acked successfully, dead-lettered, or dropped
+   * (e.g. lock-acquire timeout). Pairs with the tracking `enqueueTask` does
+   * internally for those task types. Called by PipelineWorker at every exit
+   * point of `processTask` so `waitForSessionSettle` below can unblock.
+   *
+   * Optional: only backends that support the `/session/end` in-flight
+   * barrier need to implement this (LocalStateBackend does). Backends that
+   * omit it simply never populate the set `waitForSessionSettle` reads, so
+   * the barrier becomes a no-op for that backend rather than an error.
+   */
+  settleTask?(task: TaskPayload): Promise<void>;
+  /**
+   * Resolve when `(instanceId, sessionId, teamId, agentId)` reaches a settled
+   * state with no tracked L1/L2/flush tasks. A waiter starts with the tasks
+   * already queued or in flight and is extended by tracked tasks enqueued
+   * before that active period settles, including retry/replacement ids.
+   * Tasks enqueued after the settled edge begin a new active period and do
+   * not retroactively extend a resolved waiter. Resolves immediately if the
+   * session is already settled when called.
+   *
+   * This is the barrier `StatefulPipelineManager.flushSession` uses to make
+   * `POST /session/end` block until continuously tracked extraction work for
+   * that session has committed or failed, without a global lock or polling.
+   */
+  waitForSessionSettle?(instanceId: string, sessionId: string, teamId?: string, agentId?: string): Promise<void>;
+  /**
    * Snapshot of all tasks currently waiting in the queue (not yet consumed).
    * Used by `/v2/pipeline/status` to compute per-L-type queue stats with full
    * type/sessionId/instanceId info (queue is single-shared, but task.type

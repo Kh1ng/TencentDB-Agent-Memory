@@ -243,6 +243,24 @@ export class StatefulPipelineManager {
   // Session End
   // ============================
 
+  /**
+   * Per-session end-of-conversation flush.
+   *
+   * Two responsibilities, both scoped to `sessionKey` only:
+   *   1. If there's a residual buffer below the L1 threshold, cancel the idle
+   *      timer and enqueue an immediate flush task for it.
+   *   2. Barrier: block until this session reaches a settled state with no
+   *      tracked L1/L2/flush task. This includes work already queued or in
+   *      flight plus retries/replacements enqueued before the active period
+   *      settles. Without this, a caller could see `POST /session/end`
+   *      return 200 while a Worker is still mid-extraction for the same
+   *      session, and an immediate recall would read stale data (#958).
+   *
+   * Work enqueued after the session reaches the settled edge begins a new
+   * active period. Other sessions' timers/buffers/tasks are never part of
+   * this barrier — no global lock or polling. See
+   * `LocalStateBackend.waitForSessionSettle`.
+   */
   async flushSession(sessionKey: string, instanceId?: string, teamId?: string, agentId?: string): Promise<void> {
     if (this.destroyed) return;
     if (this.sessionFilter.shouldSkip(sessionKey)) return;
@@ -253,28 +271,32 @@ export class StatefulPipelineManager {
       return;
     }
     const state = await this.stateBackend.getSessionState(effectiveInstanceId, sessionKey, teamId, agentId);
-    if (!state || state.conversation_count === 0) {
-      this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: nothing to flush`);
-      return;
+
+    if (state && state.conversation_count > 0) {
+      // 取消 idle timer
+      await this.stateBackend.removeTimer(effectiveInstanceId, buildPipelineTimerMember(sessionKey, "L1_idle", { teamId, agentId }));
+
+      // 入队 flush task
+      await this.stateBackend.enqueueTask({
+        id: `flush-${sessionKey}-${Date.now()}`,
+        type: "flush",
+        instanceId: effectiveInstanceId,
+        sessionId: sessionKey,
+        teamId,
+        agentId,
+        priority: 0,
+        data: { instanceId: effectiveInstanceId, teamId, agentId },
+        createdAt: Date.now(),
+      });
+
+      this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: flush task enqueued`);
+    } else {
+      this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: no buffered messages to flush`);
     }
 
-    // 取消 idle timer
-    await this.stateBackend.removeTimer(effectiveInstanceId, buildPipelineTimerMember(sessionKey, "L1_idle", { teamId, agentId }));
-
-    // 入队 flush task
-    await this.stateBackend.enqueueTask({
-      id: `flush-${sessionKey}-${Date.now()}`,
-      type: "flush",
-      instanceId: effectiveInstanceId,
-      sessionId: sessionKey,
-      teamId,
-      agentId,
-      priority: 0,
-      data: { instanceId: effectiveInstanceId, teamId, agentId },
-      createdAt: Date.now(),
-    });
-
-    this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: flush task enqueued`);
+    // Barrier: wait until queued/in-flight L1/L2/flush work for this session,
+    // including replacements enqueued before it settles, is terminal.
+    await this.stateBackend.waitForSessionSettle?.(effectiveInstanceId, sessionKey, teamId, agentId);
   }
 
   // ============================
