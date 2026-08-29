@@ -31,6 +31,17 @@ export class LocalStateBackend implements IStateBackend {
   private onTimerExpired?: (entry: TimerEntry) => void;
   private destroyed = false;
 
+  // Per-session in-flight tracking for the `/session/end` barrier (P0-1/#958).
+  // Populated by enqueueTask for L1/L2/flush task types, drained by settleTask
+  // as PipelineWorker finishes (success, dead-letter, or drop) each task.
+  // Enqueues also extend existing waiters so retries/replacements cannot create
+  // a false settled edge between two task ids in the same active period.
+  private sessionActiveTasks = new Map<string, Set<string>>();
+  private sessionSettleWaiters = new Map<string, Array<{ remaining: Set<string>; resolve: () => void }>>();
+
+  /** Task types the `/session/end` barrier tracks — the session-scoped extraction stages. */
+  private static readonly TRACKED_TASK_TYPES = new Set<TaskPayload["type"]>(["L1", "L2", "flush"]);
+
   constructor(options?: { onTimerExpired?: (entry: TimerEntry) => void }) {
     this.onTimerExpired = options?.onTimerExpired;
   }
@@ -146,6 +157,18 @@ export class LocalStateBackend implements IStateBackend {
   // ═══ Task Queue ═══
 
   async enqueueTask(task: TaskPayload): Promise<void> {
+    if (LocalStateBackend.TRACKED_TASK_TYPES.has(task.type)) {
+      const key = this.k(task.instanceId, task.sessionId, task.teamId, task.agentId);
+      let active = this.sessionActiveTasks.get(key);
+      if (!active) { active = new Set(); this.sessionActiveTasks.set(key, active); }
+      active.add(task.id);
+
+      const waiters = this.sessionSettleWaiters.get(key);
+      if (waiters) {
+        for (const waiter of waiters) waiter.remaining.add(task.id);
+      }
+    }
+
     const idx = this.taskQueue.findIndex(
       (t) => t.priority > task.priority || (t.priority === task.priority && t.createdAt > task.createdAt),
     );
@@ -157,6 +180,43 @@ export class LocalStateBackend implements IStateBackend {
       clearTimeout(waiter.timer);
       waiter.resolve(this.taskQueue.shift() ?? null);
     }
+  }
+
+  async settleTask(task: TaskPayload): Promise<void> {
+    if (!LocalStateBackend.TRACKED_TASK_TYPES.has(task.type)) return;
+
+    const key = this.k(task.instanceId, task.sessionId, task.teamId, task.agentId);
+    const active = this.sessionActiveTasks.get(key);
+    if (active) {
+      active.delete(task.id);
+      if (active.size === 0) this.sessionActiveTasks.delete(key);
+    }
+
+    const waiters = this.sessionSettleWaiters.get(key);
+    if (!waiters) return;
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      const waiter = waiters[i];
+      if (waiter.remaining.delete(task.id) && waiter.remaining.size === 0) {
+        waiters.splice(i, 1);
+        waiter.resolve();
+      }
+    }
+    if (waiters.length === 0) this.sessionSettleWaiters.delete(key);
+  }
+
+  async waitForSessionSettle(instanceId: string, sessionId: string, teamId?: string, agentId?: string): Promise<void> {
+    const key = this.k(instanceId, sessionId, teamId, agentId);
+    const active = this.sessionActiveTasks.get(key);
+    if (!active || active.size === 0) return;
+
+    // Start with the current active ids. enqueueTask extends this set while
+    // the waiter remains active, so it resolves only at a real settled edge.
+    const remaining = new Set(active);
+    return new Promise<void>((resolve) => {
+      let waiters = this.sessionSettleWaiters.get(key);
+      if (!waiters) { waiters = []; this.sessionSettleWaiters.set(key, waiters); }
+      waiters.push({ remaining, resolve });
+    });
   }
 
   async consumeTask(_workerId: string, blockMs?: number): Promise<TaskPayload | null> {
@@ -302,6 +362,11 @@ export class LocalStateBackend implements IStateBackend {
     this.buffers.clear();
     this.taskQueue = [];
     this.locks.clear();
+    for (const waiters of this.sessionSettleWaiters.values()) {
+      for (const w of waiters) w.resolve();
+    }
+    this.sessionSettleWaiters.clear();
+    this.sessionActiveTasks.clear();
   }
 
   getSnapshot() {

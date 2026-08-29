@@ -375,6 +375,9 @@ export class PipelineWorker {
           try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
         }
         releasePermitOnce();
+        // The task is abandoned — it will never run. Settle it so a
+        // `flushSession` barrier waiting on this session doesn't hang.
+        try { await this.backend.settleTask?.(task); } catch { /* best effort */ }
         return;
       }
       // Fall through to execute with acquired lock
@@ -492,6 +495,11 @@ export class PipelineWorker {
       this.runningTasks.delete(task.id);
       try { await this.backend.releaseLock(lockKey, this.config.workerId); } catch { /* best effort */ }
       releasePermitOnce();
+      // Terminal for this task instance regardless of outcome (success,
+      // lock-lost, retried, or dead-lettered — a retry re-enqueues under a
+      // new task id via reEnqueue() before this runs, so a `flushSession`
+      // barrier never observes a false "nothing pending" gap).
+      try { await this.backend.settleTask?.(task); } catch { /* best effort */ }
 
       // Step 7: 延迟入队 — executor 可通过 task._deferredEnqueue 暂存需要在锁释放后才入队的任务，
       // 避免新任务立即被消费时因同 session 锁仍被持有而产生不必要的锁冲突。
