@@ -296,7 +296,7 @@ async function performAutoRecallCore(params: {
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
   if (stableParts.length > 0 || prependContext) {
-    stableParts.push(gahProjectIsolation(sessionKey) ? '<memory-tools-guide>Retrieve project facts with gah memory recall --profile PROFILE --query "topic". List IDs with gah memory list --profile PROFILE, delete stale entries with gah memory delete --profile PROFILE --id ID, and retrieve a named scene with gah memory scene --profile PROFILE --name NAME. These operations use the authenticated gateway; no central-node filesystem access is needed.</memory-tools-guide>' : MEMORY_TOOLS_GUIDE);
+    stableParts.push(gahProjectIsolation(sessionKey) ? '<memory-tools-guide>Retrieve project facts with gah memory recall --profile PROFILE "topic". List IDs with gah memory list --profile PROFILE, delete stale entries with gah memory delete --profile PROFILE ID, and retrieve a named scene with gah memory scene --profile PROFILE --name NAME. These operations use the authenticated gateway; no central-node filesystem access is needed.</memory-tools-guide>' : MEMORY_TOOLS_GUIDE);
   }
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;

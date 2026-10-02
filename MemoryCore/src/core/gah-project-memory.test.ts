@@ -64,6 +64,10 @@ it('hybrid recall drops low relevance matches and expired project instructions',
   try {
     const recalled=await core.handleBeforeRecall('router pacing',key);
     expect(recalled.prependContext).toContain('Current pacing uses reset pressure.');
+    expect(recalled.appendSystemContext).toContain('gah memory recall --profile PROFILE \"topic\"');
+    expect(recalled.appendSystemContext).toContain('gah memory delete --profile PROFILE ID');
+    expect(recalled.appendSystemContext).not.toContain('--query');
+    expect(recalled.appendSystemContext).not.toContain('--id');
     expect(recalled.prependContext).not.toContain('Unrelated old memory');
     expect(recalled.prependContext).not.toContain('Old operator directive');
   } finally {await rm(dataDir,{recursive:true,force:true});}
