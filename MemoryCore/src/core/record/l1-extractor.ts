@@ -12,6 +12,7 @@
  * 4. Write to L1 JSONL files
  */
 
+import { gahProjectIsolation } from "../profile/profile-sync.js";
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
@@ -171,7 +172,7 @@ export async function extractL1Memories(params: {
   let scenes: SceneSegment[];
   try {
     scenes = await callLlmExtraction({
-      newMessages,
+      sessionKey,      newMessages,
       backgroundMessages,
       previousSceneName: options.previousSceneName,
       config,
@@ -385,6 +386,7 @@ export async function extractL1Memories(params: {
  * Call LLM to extract scene-segmented memories from conversation messages.
  */
 async function callLlmExtraction(params: {
+  sessionKey: string;
   newMessages: ConversationMessage[];
   backgroundMessages: ConversationMessage[];
   previousSceneName?: string;
@@ -397,9 +399,9 @@ async function callLlmExtraction(params: {
   /** langfuse 上报身份四元组（team/user/agent/session）。 */
   traceContext?: TraceContext;
 }): Promise<SceneSegment[]> {
-  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", llmRunner, traceContext } = params;
+  const { sessionKey, newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", llmRunner, traceContext } = params;
 
-  const systemPrompt = getExtractMemoriesSystemPrompt(promptMode);
+  const systemPrompt = getExtractMemoriesSystemPrompt(promptMode) + (gahProjectIsolation(sessionKey) ? "\nGAH project memory: write all memory content and scene names in English. Capture durable project facts and updates stated by the user. Classify factual project state statements and their corrections as episodic, not instruction. Reserve instruction for durable behavioral policies; a request to retain or acknowledge a fact does not change its factual type. Never extract one-turn commands, quoted/recalled instructions, requests to stop work or emit a fixed string, or assistant-generated rules. Reconcile a changed fact with the existing fact instead of retaining both as current." : "");
   const userPrompt = formatExtractionPrompt({
     newMessages,
     backgroundMessages,

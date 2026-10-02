@@ -1,3 +1,4 @@
+import { gahProjectIsolation } from "../profile/profile-sync.js";
 /**
  * L1 Memory Writer: writes extracted memories to JSONL files.
  *
@@ -39,6 +40,8 @@ export type MemoryType =
 
 /** Metadata for episodic memories (activity time range) */
 export interface EpisodicMetadata {
+  /** Project instruction memories expire; preferences belong in persona facts. */
+  instruction_expires_at?: string;
   activity_start_time?: string; // ISO 8601
   activity_end_time?: string; // ISO 8601
 }
@@ -225,7 +228,7 @@ export async function writeMemory(params: {
     priority: finalPriority,
     scene_name: memory.scene_name,
     source_message_ids: memory.source_message_ids,
-    metadata: memory.metadata,
+    metadata: finalType === "instruction" && gahProjectIsolation(sessionKey) ? { ...memory.metadata, instruction_expires_at: new Date(Date.now() + 30 * 86400000).toISOString() } : memory.metadata,
     timestamps: finalTimestamps,
     createdAt: now,
     updatedAt: now,

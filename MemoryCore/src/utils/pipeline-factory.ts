@@ -712,7 +712,9 @@ export function createL2Runner(opts: {
         `${TAG} [L2] Incremental query returned ${memRecords.length} record(s) (session=${sessionKey})`,
       );
 
-      records = memRecords.map((r) => ({
+      // Project instructions are retrieved only from L1, where expiration applies.
+      // Promoting them into scenes/persona would preserve them indefinitely.
+      records = memRecords.filter(r => !r.agentId?.startsWith("gah-project-") || r.type !== "instruction").map((r) => ({
         content: r.content,
         created_at: r.createdAt,
         id: r.id,
@@ -829,6 +831,7 @@ export function createL2Runner(opts: {
  * PersonaGenerator. Used by both `index.ts` and `seed-runtime.ts`.
  */
 export function createL3Runner(opts: {
+  profileScope?: string;
   pluginDataDir: string;
   cfg: MemoryTdaiConfig;
   openclawConfig: unknown;
@@ -843,7 +846,7 @@ export function createL3Runner(opts: {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage } = opts;
 
   return async () => {
-    const scopes = await discoverProfileScopes(pluginDataDir, storage, logger);
+    const scopes = opts.profileScope ? [opts.profileScope] : await discoverProfileScopes(pluginDataDir, storage, logger);
     const executionScopes = scopes.length > 0 ? scopes : [DEFAULT_PROFILE_SCOPE];
     let generatedAny = false;
 
@@ -860,7 +863,7 @@ export function createL3Runner(opts: {
       });
 
       const { should, reason } = await trigger.shouldGenerate();
-      if (!should) {
+      if (!should && !opts.profileScope) {
         logger.debug?.(`${TAG} [L3] Persona generation not needed (scope=${scope})`);
         continue;
       }
@@ -902,7 +905,7 @@ export function createL3Runner(opts: {
         storage: scopedStore,
         traceContext: scopeIsolation,
       });
-      const genResult = await generator.generateLocalPersona(reason);
+      const genResult = await generator.generateLocalPersona(reason, Boolean(opts.profileScope));
 
       const checkpoint = new CheckpointManager(scopedDir, logger, scopedStore);
       const cp = await checkpoint.read();

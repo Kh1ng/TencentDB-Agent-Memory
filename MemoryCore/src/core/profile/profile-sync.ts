@@ -8,6 +8,13 @@ import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
 
+/** All GAH chat/backend/ticket sessions of a project share profiles, never the default bucket. */
+export function gahProjectIsolation(sessionKey: string): ProfileIsolation | undefined {
+  const project = /^gah:manager:(.+)$/.exec(sessionKey)?.[1] ?? /^gah:worker:(.+):[^:]+$/.exec(sessionKey)?.[1];
+  if (!project || /[\x00-\x1f\x7f]/.test(project)) return undefined;
+  return { teamId: "default", agentId: `gah-project-${createHash("sha256").update(project.toLowerCase()).digest("hex")}` };
+}
+
 export const DEFAULT_PROFILE_SCOPE = "global";
 
 export type ProfileIsolation = { teamId?: string; userId?: string; agentId?: string; sessionId?: string };

@@ -77,6 +77,7 @@ export interface CaptureResponse {
 // ============================
 
 export interface MemorySearchRequest {
+  session_key?: string;
   query: string;
   limit?: number;
   type?: string;

@@ -178,6 +178,8 @@ export const shouldCapture = shouldExtractL1;
  * 6. Multi-language variants — Chinese prompt-injection patterns
  */
 const PROMPT_INJECTION_PATTERNS: RegExp[] = [
+  /(?:stop|halt|cease)\b.{0,100}\b(?:reply|respond|output)\b.{0,100}\b(?:fixed|exact|only|string)/i,
+  /(?:停止|停下|不再).{0,100}(?:回复|回答|输出).{0,100}(?:固定|指定|仅|只)/,
   // ── Instruction override ──
   /ignore\b.{0,30}\b(instructions|rules|guidelines)/i,
   /disregard\b.{0,30}\b(instructions|rules|guidelines)/i,
