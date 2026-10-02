@@ -822,6 +822,16 @@ export class TdaiGateway {
     const method = req.method?.toUpperCase() ?? "GET";
     const pathname = url.pathname;
 
+    // Diagnose missing client credentials without logging tokens or agent content.
+    if (["/capture", "/recall", "/session/end"].includes(pathname)) {
+      const header = req.headers["x-gah-caller"];
+      const caller = typeof header === "string" && ["cli", "server", "memory-hook"].includes(header)
+        ? header : req.headers["user-agent"]?.startsWith("curl/") ? "curl" : "unknown";
+      res.once("finish", () => this.logger.info(
+        `GAH ${method} ${pathname} status=${res.statusCode} caller=${caller} source=${req.socket.remoteAddress ?? "unknown"}`,
+      ));
+    }
+
     // Apply CORS headers based on configured allow-list (empty → no headers).
     this.applyCorsHeaders(req, res);
 

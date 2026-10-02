@@ -63,6 +63,24 @@ async function close(server: http.Server): Promise<void> {
   });
 }
 
+it("attributes rejected GAH captures without recording credentials or request content", async () => {
+  const logs: string[] = [];
+  const gateway = new TdaiGateway({ server: { host: "127.0.0.1", port: 0, apiKey: "test-secret", corsOrigins: [] } });
+  const seam = gateway as unknown as GatewayHttpTestSeam;
+  seam.logger = { ...silentLogger, info: (message: string) => { logs.push(message); } };
+  const server = http.createServer((req, res) => { void seam.handleRequest(req, res); });
+  const base = await listen(server);
+  try {
+    const response = await fetch(`${base}/capture`, {
+      method: "POST", headers: { "X-GAH-Caller": "cli", Authorization: "Bearer wrong-secret" }, body: "private-content",
+    });
+    expect(response.status).toBe(401);
+    await response.text();
+    expect(logs.join("\n")).toContain("status=401 caller=cli source=");
+    expect(logs.join("\n")).not.toMatch(/wrong-secret|test-secret|private-content/);
+  } finally { await close(server); }
+});
+
 // Regression test for a bug where POST /recall silently dropped
 // prependContext (the actual session-specific L1 memories) and returned
 // only appendSystemContext (a generic, session-independent persona/scene
