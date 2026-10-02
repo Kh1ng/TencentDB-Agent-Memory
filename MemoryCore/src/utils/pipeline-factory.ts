@@ -903,7 +903,7 @@ export function createL3Runner(opts: {
         storage: scopedStore,
         traceContext: scopeIsolation,
       });
-      const genResult = await generator.generateLocalPersona(reason);
+      const genResult = await generator.generateLocalPersona(reason, Boolean(opts.profileScope));
 
       const checkpoint = new CheckpointManager(scopedDir, logger, scopedStore);
       const cp = await checkpoint.read();

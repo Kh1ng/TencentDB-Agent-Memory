@@ -68,3 +68,25 @@ it('hybrid recall drops low relevance matches and expired project instructions',
     expect(recalled.prependContext).not.toContain('Old operator directive');
   } finally {await rm(dataDir,{recursive:true,force:true});}
 });
+
+
+it('explicit persona regeneration uses unchanged scenes while automatic generation stays incremental', async () => {
+  const { PersonaGenerator } = await import('./persona/persona-generator.js');
+  const dataDir = await mkdtemp(path.join(tmpdir(),'gah-persona-force-'));
+  let runs=0;
+  try {
+    await mkdir(path.join(dataDir,'.metadata'),{recursive:true});
+    await mkdir(path.join(dataDir,'scene_blocks'),{recursive:true});
+    await writeFile(path.join(dataDir,'persona.md'),'Old bilingual persona');
+    await writeFile(path.join(dataDir,'.metadata','recall_checkpoint.json'),JSON.stringify({last_persona_time:'2026-10-02'}));
+    await writeFile(path.join(dataDir,'.metadata','scene_index.json'),JSON.stringify([{filename:'routing.md',updated:'2026-09-01',summary:'routing'}]));
+    await writeFile(path.join(dataDir,'scene_blocks','routing.md'),'English routing facts');
+    const generator=new PersonaGenerator({dataDir,config:null,llmRunner:{run:async request=>{
+      runs++;expect(request.prompt).toContain('English routing facts');
+      await writeFile(path.join(dataDir,'persona.md'),'English regenerated persona');return '';
+    }}});
+    expect(await generator.generateLocalPersona('automatic')).toBe(false);
+    expect(await generator.generateLocalPersona('migration',true)).toBe(true);
+    expect(runs).toBe(1);
+  } finally {await rm(dataDir,{recursive:true,force:true});}
+});

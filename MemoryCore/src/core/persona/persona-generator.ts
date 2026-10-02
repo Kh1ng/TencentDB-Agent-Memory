@@ -71,7 +71,7 @@ export class PersonaGenerator {
   /**
    * Execute local persona generation without advancing checkpoint.
    */
-  async generateLocalPersona(triggerReason?: string): Promise<boolean> {
+  async generateLocalPersona(triggerReason?: string, force = false): Promise<boolean> {
     const startMs = Date.now();
     this.logger?.debug?.(`${TAG} Starting generation: reason="${triggerReason ?? "none"}"`);
 
@@ -104,7 +104,7 @@ export class PersonaGenerator {
     // 2. Load scene index + identify changed scenes
     const index = await readSceneIndex(this.dataDir, this.storage);
     const changedScenes = index.filter((e) => {
-      if (!cp.last_persona_time) return true;
+      if (force || !cp.last_persona_time) return true;
       const updatedMs = new Date(e.updated).getTime();
       const personaMs = new Date(cp.last_persona_time).getTime();
       // If either date is unparseable (NaN), treat as changed (conservative)
