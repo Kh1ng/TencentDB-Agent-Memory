@@ -10,6 +10,7 @@
  * - Extraction is NOT triggered here. The pipeline manager decides when.
  */
 
+import { gahProjectIsolation } from "../profile/profile-sync.js";
 import crypto from "node:crypto";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
@@ -122,6 +123,7 @@ export async function performAutoCapture(params: {
         filteredMessages = await recordConversation({
           sessionKey,
           sessionId,
+          agentId: gahProjectIsolation(sessionKey)?.agentId,
           rawMessages: messages,
           baseDir: pluginDataDir,
           logger,
@@ -185,6 +187,8 @@ export async function performAutoCapture(params: {
           id: generateL0RecordId(sessionKey, i),
           sessionKey,
           sessionId: sessionId || DEFAULT_ISOLATION_ID,
+          agentId: gahProjectIsolation(sessionKey)?.agentId,
+          teamId: gahProjectIsolation(sessionKey)?.teamId,
           role: msg.role,
           messageText: msg.content,
           recordedAt: now,

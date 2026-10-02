@@ -319,6 +319,7 @@ export interface CaptureResult {
 
 /** Search parameters for L1 memory search. */
 export interface MemorySearchParams {
+  sessionKey?: string;
   query: string;
   limit?: number;
   type?: string;

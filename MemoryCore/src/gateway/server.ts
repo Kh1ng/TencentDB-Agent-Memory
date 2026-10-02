@@ -262,7 +262,7 @@ function sendError(res: http.ServerResponse, status: number, message: string): v
  * persona/scene blob.
  */
 export function buildRecallContext(result: RecallResult): string {
-  return [result.appendSystemContext, result.prependContext]
+  return [result.prependContext, result.appendSystemContext]
     .filter((part): part is string => !!part)
     .join("\n\n");
 }
@@ -1062,6 +1062,11 @@ export class TdaiGateway {
           return await this.handleSearchConversations(req, res);
         case "POST /session/end":
           return await this.handleSessionEnd(req, res);
+        case "POST /memories/list":
+        case "POST /memories/delete":
+        case "POST /memories/migrate-english":
+        case "POST /profiles/read":
+          return await this.handleProjectMemory(pathname, req, res);
         case "POST /seed":
           return await this.handleSeed(req, res);
         default:
@@ -1447,6 +1452,7 @@ export class TdaiGateway {
     }
 
     const result = await this.core.searchMemories({
+      sessionKey:body.session_key,
       query: body.query,
       limit: body.limit,
       type: body.type,
@@ -1494,6 +1500,24 @@ export class TdaiGateway {
 
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
+  }
+
+  private async handleProjectMemory(operation: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<{session_key:string; id?:string; filename?:string; limit?:number; offset?:number}>(req);
+    if (typeof body.session_key !== "string" || body.session_key.length > 2048 || !/^gah:(manager:.+|worker:.+:[^:]+)$/.test(body.session_key) || /[\x00-\x1f\x7f]/.test(body.session_key)) return sendError(res,400,"A GAH project session_key is required");
+    if (operation === "/memories/delete") {
+      if (typeof body.id !== "string" || !body.id || body.id.length > 256) return sendError(res,400,"A memory ID is required");
+      return sendJson(res,200,{deleted:await this.core.deleteProjectMemory(body.session_key,body.id)});
+    }
+    if (operation === "/profiles/read") {
+      if (typeof body.filename !== "string" || !body.filename || body.filename.length > 256 || /[/\\]/.test(body.filename)) return sendError(res,400,"A project scene filename is required");
+      return sendJson(res,200,{content:await this.core.readProjectScene(body.session_key,body.filename)});
+    }
+    if (operation === "/memories/migrate-english") return sendJson(res,200,await this.core.migrateProjectEnglish(body.session_key));
+    const limit = body.limit ?? 100, offset = body.offset ?? 0;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000 || !Number.isSafeInteger(offset) || offset < 0) return sendError(res,400,"Invalid memory page");
+    const records = await this.core.projectMemories(body.session_key, true);
+    return sendJson(res,200,{records:records.slice(offset,offset+limit), total:records.length});
   }
 
   private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

@@ -829,6 +829,7 @@ export function createL2Runner(opts: {
  * PersonaGenerator. Used by both `index.ts` and `seed-runtime.ts`.
  */
 export function createL3Runner(opts: {
+  profileScope?: string;
   pluginDataDir: string;
   cfg: MemoryTdaiConfig;
   openclawConfig: unknown;
@@ -843,7 +844,7 @@ export function createL3Runner(opts: {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage } = opts;
 
   return async () => {
-    const scopes = await discoverProfileScopes(pluginDataDir, storage, logger);
+    const scopes = opts.profileScope ? [opts.profileScope] : await discoverProfileScopes(pluginDataDir, storage, logger);
     const executionScopes = scopes.length > 0 ? scopes : [DEFAULT_PROFILE_SCOPE];
     let generatedAny = false;
 
@@ -860,7 +861,7 @@ export function createL3Runner(opts: {
       });
 
       const { should, reason } = await trigger.shouldGenerate();
-      if (!should) {
+      if (!should && !opts.profileScope) {
         logger.debug?.(`${TAG} [L3] Persona generation not needed (scope=${scope})`);
         continue;
       }
