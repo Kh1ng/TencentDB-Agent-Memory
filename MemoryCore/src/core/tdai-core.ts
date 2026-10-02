@@ -514,8 +514,8 @@ export class TdaiCore {
     }
     if (migrated || deleted) {
       await this.runL2WithStore(buildProfileL2Key(scope), this.vectorStore!, this.storage);
-      await this.runL3WithStore(this.vectorStore!, this.storage, buildProfileIsolationScope(scope));
     }
+    await this.runL3WithStore(this.vectorStore!, this.storage, buildProfileIsolationScope(scope));
     return {migrated, deleted, failed};
   }
 

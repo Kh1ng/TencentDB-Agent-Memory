@@ -49,7 +49,7 @@ it('migration backs up only this project, preserves dates, removes injected inst
     expect(JSON.parse(await readFile(path.join(backups,'fact-1.json'),'utf8')).content).toBe('配额路由已修复');
     expect(await core.migrateProjectEnglish(key)).toEqual({migrated:0,deleted:0,failed:[]});
     expect(translated).toBe(1);
-    expect(l3Scopes).toEqual([`team:default|agent:${gahProjectIsolation(key)!.agentId}`]);
+    expect(l3Scopes).toEqual(Array(2).fill(`team:default|agent:${gahProjectIsolation(key)!.agentId}`));
   } finally {await rm(dataDir,{recursive:true,force:true});}
 });
 
