@@ -247,8 +247,7 @@ export class StatefulPipelineManager {
    * Per-session end-of-conversation flush.
    *
    * Two responsibilities, both scoped to `sessionKey` only:
-   *   1. If there's a residual buffer below the L1 threshold, cancel the idle
-   *      timer and enqueue an immediate flush task for it.
+   *   1. Cancel the idle timer and enqueue L1 against the durable capture cursor.
    *   2. Barrier: block until this session reaches a settled state with no
    *      tracked L1/L2/flush task. This includes work already queued or in
    *      flight plus retries/replacements enqueued before the active period
@@ -270,29 +269,21 @@ export class StatefulPipelineManager {
       this.logger?.error?.(`${TAG} flushSession called without explicit instanceId (session=${sessionKey})`);
       return;
     }
-    const state = await this.stateBackend.getSessionState(effectiveInstanceId, sessionKey, teamId, agentId);
-
-    if (state && state.conversation_count > 0) {
-      // 取消 idle timer
-      await this.stateBackend.removeTimer(effectiveInstanceId, buildPipelineTimerMember(sessionKey, "L1_idle", { teamId, agentId }));
-
-      // 入队 flush task
-      await this.stateBackend.enqueueTask({
-        id: `flush-${sessionKey}-${Date.now()}`,
-        type: "flush",
-        instanceId: effectiveInstanceId,
-        sessionId: sessionKey,
-        teamId,
-        agentId,
-        priority: 0,
-        data: { instanceId: effectiveInstanceId, teamId, agentId },
-        createdAt: Date.now(),
-      });
-
-      this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: flush task enqueued`);
-    } else {
-      this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: no buffered messages to flush`);
-    }
+    // The in-memory count can be zero after restart while durable L0 remains.
+    // The L1 runner checks its persisted cursor and cheaply skips empty work.
+    await this.stateBackend.removeTimer(effectiveInstanceId, buildPipelineTimerMember(sessionKey, "L1_idle", { teamId, agentId }));
+    await this.stateBackend.enqueueTask({
+      id: `flush-${sessionKey}-${Date.now()}`,
+      type: "L1",
+      instanceId: effectiveInstanceId,
+      sessionId: sessionKey,
+      teamId,
+      agentId,
+      priority: 0,
+      data: { instanceId: effectiveInstanceId, teamId, agentId },
+      createdAt: Date.now(),
+    });
+    this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: L1 task enqueued`);
 
     // Barrier: wait until queued/in-flight L1/L2/flush work for this session,
     // including replacements enqueued before it settles, is terminal.

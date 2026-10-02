@@ -2620,7 +2620,7 @@ export class TdaiGateway {
         }
       },
       async executeFlush(task: TaskPayload) {
-        await core.handleSessionEnd(task.sessionId);
+        await this.executeL1(task);
       },
 
       // ── Offload executors (L1 summary, L1.5 task judgment, L2 MMD update) ──

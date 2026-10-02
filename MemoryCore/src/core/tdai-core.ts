@@ -29,13 +29,14 @@ import type {
   MemorySearchParams,
   ConversationSearchParams,
 } from "./types.js";
-import { gahProjectIsolation, buildProfileIsolationScope } from "./profile/profile-sync.js";
+import { gahProjectIsolation, buildProfileIsolationScope, buildProfileStableId } from "./profile/profile-sync.js";
 import { queryMemoryRecords } from "./record/l1-reader.js";
 import { looksLikePromptInjection } from "../utils/sanitize.js";
 import { createScopedStorageAdapter } from "./storage/adapter.js";
 import { readSceneIndex } from "./scene/scene-index.js";
 import { buildProfileL2Key } from "../utils/pipeline-factory.js";
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
@@ -455,6 +456,7 @@ export class TdaiCore {
     const record = (await this.projectMemories(sessionKey, true)).find(record => record.id === id);
     if (!record) return false;
     await this.backupProjectMemory(record);
+    await this.invalidateProjectProfiles(sessionKey);
     return await this.vectorStore!.deleteL1(id, {sessionKey:record.sessionKey, agentId:record.agentId});
   }
 
@@ -467,6 +469,44 @@ export class TdaiCore {
       await fs.mkdir(path.dirname(target), {recursive:true,mode:0o700});
       await fs.writeFile(target, JSON.stringify(record), {flag:"wx",mode:0o600}).catch(error => { if (error.code !== "EEXIST") throw error; });
     }
+  }
+
+  /** Back up and remove derived data before deleting facts or rebuilding a project. */
+  private async invalidateProjectProfiles(sessionKey: string) {
+    const isolation = gahProjectIsolation(sessionKey);
+    if (!isolation) throw new Error("A GAH project is required");
+    const scope = buildProfileIsolationScope(isolation);
+    const prefix = `profiles/${encodeURIComponent(scope)}/`;
+    const backup = `memory-migrations/${isolation.agentId}/profiles-${randomUUID()}`;
+    const records = (await this.vectorStore?.pullProfiles?.() ?? []).filter(record =>
+      (record.teamId === isolation.teamId && record.agentId === isolation.agentId)
+      || record.id === buildProfileStableId(scope, record.type, record.filename));
+    if (records.length && !this.vectorStore?.deleteProfiles) throw new Error("Project profile deletion is unavailable");
+    const files: Array<{key:string; content:string}> = [];
+    if (this.storage) {
+      let marker: string | undefined;
+      do {
+        const page = await this.storage.getBackend().listObjects(prefix, {recursive:true, maxKeys:1000, marker});
+        for (const entry of page.entries.filter(entry => !entry.isDirectory)) {
+          if (!entry.key.startsWith(prefix)) throw new Error("Invalid project profile key");
+          const content = await this.storage.readFile(entry.key);
+          if (content === null) throw new Error("Project profile changed during backup");
+          files.push({key:entry.key, content});
+        }
+        marker = page.nextMarker;
+      } while (marker);
+    }
+    if (this.storage && this.storage.type !== "local") {
+      await this.storage.writeFile(`${backup}.json`, JSON.stringify({records, files}));
+    } else {
+      const target = path.join(this.dataDir, backup);
+      await fs.mkdir(target, {recursive:true,mode:0o700});
+      await fs.writeFile(path.join(target,"store.json"), JSON.stringify({records, files}), {flag:"wx",mode:0o600});
+      await fs.cp(path.join(this.dataDir,prefix), path.join(target,"local"), {recursive:true}).catch(error => {if(error.code !== "ENOENT") throw error;});
+    }
+    await this.vectorStore?.deleteProfiles?.(records.map(record => record.id));
+    await this.storage?.rmdir(prefix);
+    await fs.rm(path.join(this.dataDir,prefix), {recursive:true,force:true});
   }
 
   async readProjectScene(sessionKey: string, filename: string): Promise<string | null> {
@@ -512,9 +552,9 @@ export class TdaiCore {
         migrated++;
       } catch { failed.push(record.id); }
     }
-    if (migrated || deleted) {
-      await this.runL2WithStore(buildProfileL2Key(scope), this.vectorStore!, this.storage);
-    }
+    // Existing derived documents may retain deleted or expired instructions.
+    await this.invalidateProjectProfiles(sessionKey);
+    await this.runL2WithStore(buildProfileL2Key(scope), this.vectorStore!, this.storage);
     await this.runL3WithStore(this.vectorStore!, this.storage, buildProfileIsolationScope(scope));
     return {migrated, deleted, failed};
   }
@@ -596,6 +636,7 @@ export class TdaiCore {
   async handleSessionEnd(sessionKey: string): Promise<void> {
     if (!sessionKey) return;
     await this.storeReady?.catch(() => {});
+    await this.ensureSchedulerStarted();
     if (!this.scheduler) return;
     await this.scheduler.flushSession(sessionKey);
   }
@@ -674,8 +715,8 @@ export class TdaiCore {
   setStatefulPipelineManager(manager: any): void {
     // Replace scheduler with the stateful version
     this.scheduler = manager;
-    // Mark scheduler as "started" so ensureSchedulerStarted() becomes a no-op
-    this.schedulerStartPromise = Promise.resolve();
+    // The replacement has not restored persisted sessions yet.
+    this.schedulerStartPromise = undefined;
     this.logger.info("[tdai-core] Switched to StatefulPipelineManager (distributed mode)");
   }
 
@@ -1275,11 +1316,11 @@ export class TdaiCore {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger, this.storage);
         const cp = await checkpoint.read();
-        scheduler.start(checkpoint.getAllPipelineStates(cp));
+        await scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);
       } catch (err) {
         this.logger.error(`${TAG} Failed to restore checkpoint: ${err instanceof Error ? err.message : String(err)}`);
-        scheduler.start({});
+        await scheduler.start({});
       }
     })();
 

@@ -712,7 +712,9 @@ export function createL2Runner(opts: {
         `${TAG} [L2] Incremental query returned ${memRecords.length} record(s) (session=${sessionKey})`,
       );
 
-      records = memRecords.map((r) => ({
+      // Project instructions are retrieved only from L1, where expiration applies.
+      // Promoting them into scenes/persona would preserve them indefinitely.
+      records = memRecords.filter(r => !r.agentId?.startsWith("gah-project-") || r.type !== "instruction").map((r) => ({
         content: r.content,
         created_at: r.createdAt,
         id: r.id,

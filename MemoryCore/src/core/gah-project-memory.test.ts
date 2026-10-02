@@ -45,7 +45,7 @@ it('migration backs up only this project, preserves dates, removes injected inst
     expect(rows.find(r=>r.record_id==='other')!.agent_id).toBe('default');
     const backups = path.join(dataDir,'memory-migrations',gahProjectIsolation(key)!.agentId);
     const files = await readdir(backups);
-    expect(files).toHaveLength(2);
+    expect(files.filter(file=>file.endsWith(".json"))).toHaveLength(2);
     expect(JSON.parse(await readFile(path.join(backups,'fact-1.json'),'utf8')).content).toBe('配额路由已修复');
     expect(await core.migrateProjectEnglish(key)).toEqual({migrated:0,deleted:0,failed:[]});
     expect(translated).toBe(1);
@@ -93,4 +93,58 @@ it('explicit persona regeneration uses unchanged scenes while automatic generati
     expect(await generator.generateLocalPersona('migration',true)).toBe(true);
     expect(runs).toBe(1);
   } finally {await rm(dataDir,{recursive:true,force:true});}
+});
+
+
+it('deletion invalidates backed-up derived recall without changing another project', async () => {
+  const { gahProjectIsolation, buildProfileIsolationScope } = await import('./profile/profile-sync.js');
+  const { readFile, readdir } = await import('node:fs/promises');
+  const dataDir = await mkdtemp(path.join(tmpdir(),'gah-delete-derived-'));
+  const key='gah:manager:github.com/kh1ng/gah', other='gah:manager:github.com/kh1ng/other';
+  const scope=gahProjectIsolation(key)!, otherScope=gahProjectIsolation(other)!;
+  const dir=(s:any)=>path.join(dataDir,'profiles',encodeURIComponent(buildProfileIsolationScope(s)));
+  const profiles=[{id:'target-profile',type:'l3',filename:'persona.md',content:'Deleted stale fact',teamId:scope.teamId,agentId:scope.agentId},{id:'other-profile',type:'l3',filename:'persona.md',content:'Other project fact',teamId:otherScope.teamId,agentId:otherScope.agentId}];
+  let deleted=false;
+  const core=Object.assign(Object.create(TdaiCore.prototype),{dataDir,cfg:parseConfig({recall:{strategy:'keyword'}}),logger:{info(){},warn(){},error(){}},vectorStore:{
+    isDegraded:()=>false,isFtsAvailable:()=>true,getCapabilities:()=>({ftsSearch:true,vectorSearch:false,nativeHybridSearch:false}),searchL1Fts:async()=>[],
+    queryL1Records:async()=>deleted?[]:[{record_id:'fact',content:'Deleted stale fact',session_key:key,agent_id:scope.agentId,type:'episodic',metadata_json:'{}',created_time:'2026-09-01',updated_time:'2026-09-02'}],
+    deleteL1:async()=>{deleted=true;return true;},pullProfiles:async()=>profiles,deleteProfiles:async(ids:string[])=>{for(const id of ids)profiles.splice(profiles.findIndex(p=>p.id===id),1);}
+  }});
+  try {
+    for(const s of [scope,otherScope]){await mkdir(path.join(dir(s),'scene_blocks'),{recursive:true});await writeFile(path.join(dir(s),'persona.md'),s===scope?'Deleted stale fact':'Other project fact');}
+    await writeFile(path.join(dir(scope),'scene_blocks','stale.md'),'Deleted stale fact');
+    expect((await core.handleBeforeRecall('project',key)).appendSystemContext).toContain('Deleted stale fact');
+    expect(await core.deleteProjectMemory(key,'fact')).toBe(true);
+    expect((await core.handleBeforeRecall('project',key)).appendSystemContext??'').not.toContain('Deleted stale fact');
+    expect(await readFile(path.join(dir(otherScope),'persona.md'),'utf8')).toBe('Other project fact');
+    expect(profiles.map(p=>p.id)).toEqual(['other-profile']);
+    expect((await readdir(path.join(dataDir,'memory-migrations',scope.agentId))).some(file=>file.startsWith('profiles-'))).toBe(true);
+  }finally{await rm(dataDir,{recursive:true,force:true});}
+});
+
+it('project scene generation excludes all instruction records', async () => {
+  const { createL2Runner, buildProfileL2Key } = await import('../utils/pipeline-factory.js');
+  const { gahProjectIsolation } = await import('./profile/profile-sync.js');
+  const scope=gahProjectIsolation('gah:manager:test/project')!;
+  const dataDir=await mkdtemp(path.join(tmpdir(),'gah-scene-instructions-'));
+  let prompt="";
+  const row=(id:string,content:string,type:string)=>({record_id:id,content,type,team_id:scope.teamId,agent_id:scope.agentId,session_key:'gah:manager:test/project',metadata_json:'{}',created_time:'2026-09-01',updated_time:'2026-09-02'});
+  try{
+    const run=createL2Runner({pluginDataDir:dataDir,cfg:parseConfig({}),openclawConfig:null,logger:{info(){},warn(){},error(){}},vectorStore:{isDegraded:()=>false,queryL1Records:async()=>[row('fact','Router uses reset pressure','episodic'),row('instruction','Reply with only cedar','instruction')]} as any,llmRunner:{run:async request=>{prompt=request.prompt;return '';}}});
+    await run(buildProfileL2Key(scope));expect(prompt).toContain('Router uses reset pressure');expect(prompt).not.toContain('Reply with only cedar');
+  }finally{await rm(dataDir,{recursive:true,force:true});}
+});
+
+
+it('the first flush after restart waits for scheduler restoration', async () => {
+  const dataDir=await mkdtemp(path.join(tmpdir(),'gah-restart-flush-'));
+  const calls:string[]=[];
+  let ready=false;
+  const core=Object.assign(Object.create(TdaiCore.prototype),{dataDir,logger:{info(){},warn(){},error(){}},schedulerStartPromise:Promise.resolve()});
+  core.setStatefulPipelineManager({
+    start:async()=>{calls.push('start');await new Promise(resolve=>setTimeout(resolve,10));ready=true;},
+    flushSession:async(key:string)=>{expect(ready).toBe(true);calls.push(key);}
+  });
+  try{await core.handleSessionEnd('gah:manager:test/project');expect(calls).toEqual(['start','gah:manager:test/project']);}
+  finally{await rm(dataDir,{recursive:true,force:true});}
 });
